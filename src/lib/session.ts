@@ -26,7 +26,7 @@ export async function createSession(
           session_id: sessionId,
           pin,
           host_id: userId,
-          status: "waiting",
+          status: "pending", // Changed from "waiting" to "pending"
           created_at: new Date().toISOString(),
         },
       ])
@@ -48,7 +48,7 @@ export async function validateSession(sessionId: string, pin: string) {
       .select("*")
       .eq("session_id", sessionId)
       .eq("pin", pin)
-      .eq("status", "waiting")
+      .in("status", ["pending", "active"]) // Allow joining for both pending and active sessions
       .single();
 
     if (error) return false;
@@ -64,6 +64,7 @@ export async function joinSession(
   sessionId: string,
   userId: string,
   userName: string,
+  isHost: boolean = false,
 ) {
   try {
     console.log(`User ${userName} (${userId}) joining session ${sessionId}`);
@@ -102,6 +103,7 @@ export async function joinSession(
           user_name: userName,
           joined_at: new Date().toISOString(),
           connection_quality: "good",
+          status: isHost ? "admitted" : "pending", // Hosts are automatically admitted, others are pending
         },
       ])
       .select();
@@ -117,7 +119,7 @@ export async function joinSession(
 // Update session status
 export async function updateSessionStatus(
   sessionId: string,
-  status: "waiting" | "active" | "ended",
+  status: "pending" | "active" | "ended",
 ) {
   try {
     const { data, error } = await supabase
@@ -182,12 +184,22 @@ export async function addSessionContent(
 }
 
 // Get all viewers in a session
-export async function getSessionViewers(sessionId: string) {
+export async function getSessionViewers(
+  sessionId: string,
+  status?: "pending" | "admitted",
+) {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from("session_viewers")
       .select("*")
       .eq("session_id", sessionId);
+
+    // If status is provided, filter by status
+    if (status) {
+      query = query.eq("status", status);
+    }
+
+    const { data, error } = await query;
 
     if (error) throw error;
     return data;
@@ -215,6 +227,28 @@ export async function updateViewerConnectionQuality(
     return data[0];
   } catch (error) {
     console.error("Error updating viewer connection quality:", error);
+    throw error;
+  }
+}
+
+// Update viewer admission status
+export async function updateViewerStatus(
+  sessionId: string,
+  userId: string,
+  status: "pending" | "admitted" | "rejected",
+) {
+  try {
+    const { data, error } = await supabase
+      .from("session_viewers")
+      .update({ status })
+      .eq("session_id", sessionId)
+      .eq("user_id", userId)
+      .select();
+
+    if (error) throw error;
+    return data[0];
+  } catch (error) {
+    console.error("Error updating viewer status:", error);
     throw error;
   }
 }
