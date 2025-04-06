@@ -13,6 +13,8 @@ import { Badge } from "@/components/ui/badge";
 import { Copy, FileVideo, Users, Wifi, WifiOff } from "lucide-react";
 import ContentUploader from "../content/ContentUploader";
 import { useToast } from "@/components/ui/use-toast";
+import { useAuth } from "../../../supabase/auth";
+import { joinSession, getSessionViewers } from "@/lib/session";
 
 interface Viewer {
   id: string;
@@ -39,28 +41,60 @@ export default function WaitingRoom({
   isHost,
   onStart,
 }: WaitingRoomProps) {
-  const [viewers, setViewers] = useState<Viewer[]>([
-    {
-      id: "1",
-      name: "You",
-      isHost: isHost,
-      connectionQuality: "good",
-    },
-    {
-      id: "2",
-      name: "John Doe",
-      email: "john@example.com",
-      isHost: false,
-      connectionQuality: "good",
-    },
-    {
-      id: "3",
-      name: "Jane Smith",
-      email: "jane@example.com",
-      isHost: false,
-      connectionQuality: "fair",
-    },
-  ]);
+  const { user } = useAuth();
+
+  useEffect(() => {
+    if (sessionId && user) {
+      // Join the session
+      const joinUserToSession = async () => {
+        try {
+          await joinSession(
+            sessionId,
+            user.id,
+            user.email?.split("@")[0] || "Anonymous",
+          );
+          fetchViewers();
+        } catch (error) {
+          console.error("Error joining session:", error);
+          toast({
+            title: "Error",
+            description: "Failed to join the session. Please try again.",
+            variant: "destructive",
+          });
+        }
+      };
+
+      joinUserToSession();
+
+      // Set up interval to refresh viewers list
+      const intervalId = setInterval(fetchViewers, 5000); // Refresh every 5 seconds
+
+      return () => clearInterval(intervalId);
+    }
+  }, [sessionId, user]);
+
+  const fetchViewers = async () => {
+    try {
+      const sessionViewers = await getSessionViewers(sessionId);
+      // Transform to our viewer format
+      const formattedViewers = sessionViewers.map((viewer) => ({
+        id: viewer.user_id,
+        name: viewer.user_name,
+        email: viewer.user_id.includes("@") ? viewer.user_id : undefined,
+        isHost: viewer.user_id === sessionViewers[0]?.user_id, // Assuming first viewer is host
+        connectionQuality: (viewer.connection_quality || "good") as
+          | "good"
+          | "fair"
+          | "poor"
+          | "offline",
+      }));
+
+      setViewers(formattedViewers);
+    } catch (error) {
+      console.error("Error fetching viewers:", error);
+    }
+  };
+  const [viewers, setViewers] = useState<Viewer[]>([]);
 
   const [content, setContent] = useState<{
     type: string;

@@ -85,28 +85,34 @@ export default function VideoPlayer({
       .on(
         "postgres_changes",
         {
-          event: "UPDATE",
+          event: "*", // Listen for all events (INSERT, UPDATE, DELETE)
           schema: "public",
           table: "session_playback_state",
           filter: `session_id=eq.${sessionId}`,
         },
         (payload) => {
           // Only process updates from other users
-          if (payload.new.updated_by !== userId) {
+          if (payload.new && payload.new.updated_by !== userId) {
             const { is_playing, current_time } = payload.new;
+            console.log(
+              `Received playback update: playing=${is_playing}, time=${current_time}`,
+            );
 
             if (is_playing !== isPlaying) {
               setIsPlaying(is_playing);
               if (is_playing) {
-                videoRef.current?.play();
+                videoRef.current?.play().catch((err) => {
+                  console.error("Error playing video:", err);
+                });
               } else {
                 videoRef.current?.pause();
               }
             }
 
             // Only update time if the difference is significant and user is not seeking
-            if (!isUserSeeking && Math.abs(current_time - currentTime) > 1) {
+            if (!isUserSeeking && Math.abs(current_time - currentTime) > 0.5) {
               if (videoRef.current) {
+                console.log(`Syncing video time to ${current_time}`);
                 videoRef.current.currentTime = current_time;
               }
             }
@@ -115,10 +121,47 @@ export default function VideoPlayer({
       )
       .subscribe();
 
+    // Initialize playback state when joining
+    const initializePlaybackState = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("session_playback_state")
+          .select("*")
+          .eq("session_id", sessionId)
+          .single();
+
+        if (error) {
+          // If no record exists, create one
+          if (error.code === "PGRST116") {
+            if (isHost) {
+              await updatePlaybackState(false, 0);
+            }
+          } else {
+            console.error("Error fetching playback state:", error);
+          }
+        } else if (data) {
+          // Set initial state from database
+          setIsPlaying(data.is_playing);
+          if (videoRef.current) {
+            videoRef.current.currentTime = data.current_time;
+            if (data.is_playing) {
+              videoRef.current.play().catch((err) => {
+                console.error("Error playing video:", err);
+              });
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error initializing playback state:", error);
+      }
+    };
+
+    initializePlaybackState();
+
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [sessionId, userId, isPlaying, currentTime, isUserSeeking]);
+  }, [sessionId, userId, isPlaying, currentTime, isUserSeeking, isHost]);
 
   // Update playback state to database
   const updatePlaybackState = async (playing: boolean, time: number) => {
@@ -127,15 +170,25 @@ export default function VideoPlayer({
     if (now - lastUpdateTime < 500) return;
 
     setLastUpdateTime(now);
+    console.log(`Updating playback state: playing=${playing}, time=${time}`);
 
     try {
-      await supabase.from("session_playback_state").upsert({
-        session_id: sessionId,
-        is_playing: playing,
-        current_time: time,
-        updated_at: new Date().toISOString(),
-        updated_by: userId,
-      });
+      const { data, error } = await supabase
+        .from("session_playback_state")
+        .upsert({
+          session_id: sessionId,
+          is_playing: playing,
+          current_time: time,
+          updated_at: new Date().toISOString(),
+          updated_by: userId,
+        })
+        .select();
+
+      if (error) {
+        console.error("Error updating playback state:", error);
+      } else {
+        console.log("Playback state updated successfully:", data);
+      }
     } catch (error) {
       console.error("Error updating playback state:", error);
     }
@@ -156,7 +209,14 @@ export default function VideoPlayer({
 
   const handleTimeUpdate = () => {
     if (videoRef.current && !isUserSeeking) {
-      setCurrentTime(videoRef.current.currentTime);
+      const newTime = videoRef.current.currentTime;
+      setCurrentTime(newTime);
+
+      // If host, periodically update the server with current time
+      // This ensures viewers stay in sync even without explicit controls
+      if (isHost && isPlaying && Math.abs(newTime - currentTime) > 1) {
+        updatePlaybackState(isPlaying, newTime);
+      }
     }
   };
 

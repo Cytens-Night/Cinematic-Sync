@@ -66,6 +66,33 @@ export async function joinSession(
   userName: string,
 ) {
   try {
+    console.log(`User ${userName} (${userId}) joining session ${sessionId}`);
+
+    // First check if this user is already in the session
+    const { data: existingViewer } = await supabase
+      .from("session_viewers")
+      .select("*")
+      .eq("session_id", sessionId)
+      .eq("user_id", userId)
+      .single();
+
+    // If already joined, just update the connection quality and timestamp
+    if (existingViewer) {
+      const { data, error } = await supabase
+        .from("session_viewers")
+        .update({
+          connection_quality: "good",
+          joined_at: new Date().toISOString(),
+        })
+        .eq("session_id", sessionId)
+        .eq("user_id", userId)
+        .select();
+
+      if (error) throw error;
+      return data[0];
+    }
+
+    // Otherwise insert a new viewer
     const { data, error } = await supabase
       .from("session_viewers")
       .insert([
@@ -115,6 +142,14 @@ export async function addSessionContent(
   contentTitle?: string,
 ) {
   try {
+    console.log(
+      `Adding content to session ${sessionId}: ${contentType}, ${contentSource}`,
+    );
+
+    // First, delete any existing content for this session to avoid conflicts
+    await supabase.from("session_content").delete().eq("session_id", sessionId);
+
+    // Then add the new content
     const { data, error } = await supabase
       .from("session_content")
       .insert([
@@ -129,6 +164,16 @@ export async function addSessionContent(
       .select();
 
     if (error) throw error;
+
+    // Initialize or reset playback state when adding new content
+    await supabase.from("session_playback_state").upsert({
+      session_id: sessionId,
+      is_playing: false,
+      current_time: 0,
+      updated_at: new Date().toISOString(),
+      updated_by: "system",
+    });
+
     return data[0];
   } catch (error) {
     console.error("Error adding session content:", error);

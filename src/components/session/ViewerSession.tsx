@@ -24,6 +24,7 @@ import {
   updateSessionStatus,
   getSessionViewers,
   removeSessionViewer,
+  joinSession,
 } from "@/lib/session";
 
 interface Viewer {
@@ -47,28 +48,7 @@ export default function ViewerSession({
 }: ViewerSessionProps) {
   const [isChatOpen, setIsChatOpen] = useState(true);
   const [isViewersOpen, setIsViewersOpen] = useState(false);
-  const [viewers, setViewers] = useState<Viewer[]>([
-    {
-      id: "1",
-      name: "You",
-      isHost: isHost,
-      connectionQuality: "good",
-    },
-    {
-      id: "2",
-      name: "John Doe",
-      email: "john@example.com",
-      isHost: false,
-      connectionQuality: "good",
-    },
-    {
-      id: "3",
-      name: "Jane Smith",
-      email: "jane@example.com",
-      isHost: false,
-      connectionQuality: "fair",
-    },
-  ]);
+  const [viewers, setViewers] = useState<Viewer[]>([]);
 
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -76,16 +56,40 @@ export default function ViewerSession({
 
   useEffect(() => {
     // Fetch viewers when component mounts
-    if (sessionId) {
-      fetchViewers();
-    }
+    if (sessionId && user) {
+      // Join the session first
+      const joinUserToSession = async () => {
+        try {
+          await joinSession(
+            sessionId,
+            user.id,
+            user.email?.split("@")[0] || "Anonymous",
+          );
+          console.log(`User ${user.id} joined session ${sessionId}`);
+          fetchViewers();
+        } catch (error) {
+          console.error("Error joining session:", error);
+          toast({
+            title: "Error",
+            description: "Failed to join the session. Please try again.",
+            variant: "destructive",
+          });
+        }
+      };
 
-    // Clean up when component unmounts
-    return () => {
-      if (user && sessionId) {
-        removeSessionViewer(sessionId, user.id).catch(console.error);
-      }
-    };
+      joinUserToSession();
+
+      // Set up interval to refresh viewers list
+      const intervalId = setInterval(fetchViewers, 10000); // Refresh every 10 seconds
+
+      // Clean up when component unmounts
+      return () => {
+        clearInterval(intervalId);
+        if (user && sessionId) {
+          removeSessionViewer(sessionId, user.id).catch(console.error);
+        }
+      };
+    }
   }, [sessionId, user]);
 
   const fetchViewers = async () => {
